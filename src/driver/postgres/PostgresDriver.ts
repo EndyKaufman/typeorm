@@ -762,6 +762,33 @@ export class PostgresDriver implements Driver {
         return type;
     }
 
+    private reconnectPromise: Promise<any> | null = null;
+
+    private async reconnectWithFreshCredentials(error: Error, failedUser: string): Promise<any> {
+        if (!this.reconnectPromise) {
+            this.reconnectPromise = (async () => {
+                // await this.disconnect();
+
+                try {
+                    if (!this.options.reconnectOptionsProvider) {
+                        this.connection.logger.log("warn", "reconnectOptionsProvider not set");
+                        throw error;
+                    }
+                    const freshCredentials = await this.options.reconnectOptionsProvider(this.options, failedUser);
+                    this.options = {...this.options, ...freshCredentials};
+
+                    this.connection.logger.log("info", "Retrying connection with fresh credentials");
+
+                    await this.connect();
+                } finally {
+                    this.reconnectPromise = null;
+                }
+            })();
+        }
+
+        return this.reconnectPromise;
+    }
+
     /**
      * Obtains a new database connection to a master server.
      * Used for replication.
@@ -770,6 +797,17 @@ export class PostgresDriver implements Driver {
     obtainMasterConnection(): Promise<any> {
         return new Promise((ok, fail) => {
             this.master.connect((err: any, connection: any, release: any) => {
+                if (err && err instanceof Error) {
+                    const match = /^password authentication failed for user "(.+?)"$/.exec(err.message);
+                    if (match) {
+                        this.reconnectWithFreshCredentials(err, match[1]).then(() => {
+                            this.obtainMasterConnection().then(ok).catch(fail);
+                        }).catch(fail);
+
+                        return;
+                    }
+                }
+
                 err ? fail(err) : ok([connection, release]);
             });
         });

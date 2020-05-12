@@ -46,4 +46,14 @@ export interface PostgresConnectionOptions extends BaseConnectionOptions, Postgr
     * Defaults to logging error with `warn` level.
      */
     readonly poolErrorHandler?: (err: any) => any;
+
+    /**
+     * A handler to obtain new connection options when "password authentication failed" error occurs
+     */
+    readonly reconnectOptionsProvider?: (current: PostgresConnectionCredentialsOptions, expiredUser: string) => Promise<PostgresConnectionCredentialsOptions>;
+
+    /**
+     * Max reconnect attempts from query method
+     */
+    readonly maxQueryRunnerRetries?: number;
 }

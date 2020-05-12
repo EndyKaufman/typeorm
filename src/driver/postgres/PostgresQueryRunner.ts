@@ -44,7 +44,7 @@ export class PostgresQueryRunner extends BaseQueryRunner implements QueryRunner 
     /**
      * Promise used to obtain a database connection for a first time.
      */
-    protected databaseConnectionPromise: Promise<any>;
+    protected databaseConnectionPromise: Promise<any> | null;
 
     /**
      * Special callback provided by a driver used to release a created connection.
@@ -154,7 +154,7 @@ export class PostgresQueryRunner extends BaseQueryRunner implements QueryRunner 
     /**
      * Executes a given SQL query.
      */
-    query(query: string, parameters?: any[]): Promise<any> {
+    query(query: string, parameters?: any[], retryCount?: number): Promise<any> {
         if (this.isReleased)
             throw new QueryRunnerAlreadyReleasedError();
 
@@ -175,6 +175,22 @@ export class PostgresQueryRunner extends BaseQueryRunner implements QueryRunner 
 
                     if (err) {
                         this.driver.connection.logger.logQueryError(err, query, parameters, this);
+                        if (err instanceof Error && err.message && err.message.startsWith("permission denied for table")) {
+                            if (retryCount && retryCount > ((this.driver.options.maxQueryRunnerRetries !== undefined) ? this.driver.options.maxQueryRunnerRetries + 1 : 1)) {
+                                this.connection.logger.log("warn", `Permission still denied after retrying connection, retries = ${retryCount}`, this);
+                                fail(new QueryFailedError(query, parameters, err));
+                            } else {
+                                this.connection.logger.log("info", `Retrying connection (${retryCount})`, this);
+                                if (this.databaseConnection) {
+                                    this.databaseConnection = null;
+                                    this.databaseConnectionPromise = null;
+                                }
+                                this.connect().then(() => {
+                                    this.query(query, parameters, retryCount ? retryCount + 1 : 1).then(ok).catch(fail);
+                                }).catch(fail);
+                            }
+                            return;
+                        }
                         fail(new QueryFailedError(query, parameters, err));
                     } else {
                         switch (result.command) {
